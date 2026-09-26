@@ -84,8 +84,12 @@ struct SynthGowinPass : public ScriptPass
 		log("    -noflatten\n");
 		log("        do not flatten design before synthesis\n");
 		log("\n");
+		log("    -widelut\n");
+		log("        use muxes to implement LUTs larger than LUT4s. This maps for depth\n");
+		log("        and usually gives larger and slower designs than the default.\n");
+		log("\n");
 		log("    -nowidelut\n");
-		log("        do not use muxes to implement LUTs larger than LUT4s\n");
+		log("        do not use muxes to implement LUTs larger than LUT4s (default)\n");
 		log("\n");
 		log("    -noiopads\n");
 		log("        do not emit IOB at top level ports\n");
@@ -115,7 +119,7 @@ struct SynthGowinPass : public ScriptPass
 	}
 
 	string top_opt, vout_file, json_file, family;
-	bool nobram, nolutram, flatten, nodffe, strict_gw5a_dffs, nowidelut, noiopads, noalu, no_rw_check, setundef, nodsp;
+	bool nobram, nolutram, flatten, nodffe, strict_gw5a_dffs, widelut, noiopads, noalu, no_rw_check, setundef, nodsp;
 
 	void clear_flags() override
 	{
@@ -128,7 +132,7 @@ struct SynthGowinPass : public ScriptPass
 		nodffe = false;
 		strict_gw5a_dffs = false;
 		nolutram = false;
-		nowidelut = false;
+		widelut = false;
 		noiopads = false;
 		noalu = false;
 		no_rw_check = false;
@@ -192,8 +196,12 @@ struct SynthGowinPass : public ScriptPass
 				flatten = false;
 				continue;
 			}
+			if (args[argidx] == "-widelut") {
+				widelut = true;
+				continue;
+			}
 			if (args[argidx] == "-nowidelut") {
-				nowidelut = true;
+				widelut = false;
 				continue;
 			}
 			if (args[argidx] == "-noalu") {
@@ -354,11 +362,15 @@ struct SynthGowinPass : public ScriptPass
 		{
 			run("sort");
 			run("read_verilog -icells -lib -specify +/abc9_model.v");
+			// Mapping for area gives smaller and, as it needs less routing,
+			// usually also faster designs than mapping for depth.
+			std::string area_script = RTLIL::constpad.at("abc9.script.default.area");
+			std::replace(area_script.begin(), area_script.end(), ' ', ',');
 			if (help_mode) {
-				run("abc9 -maxlut 4 -W 500", "(if -nowidelut)");
-				run("abc9 -lut 4:8 -W 500", "(unless -nowidelut)");
-			} else if (nowidelut) {
-				run("abc9 -maxlut 4 -W 500");
+				run("abc9 -maxlut 4 -W 500 -script <area script>", "(unless -widelut)");
+				run("abc9 -lut 4:8 -W 500", "(if -widelut)");
+			} else if (!widelut) {
+				run("abc9 -maxlut 4 -W 500 -script " + area_script);
 			} else {
 				// A LUT5 to LUT8 is built from 2 to 16 LUT4s and MUX2s, so its
 				// area doubles with each input above four.
