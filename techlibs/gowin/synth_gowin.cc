@@ -352,10 +352,15 @@ struct SynthGowinPass : public ScriptPass
 		{
 			run("sort");
 			run("read_verilog -icells -lib -specify +/abc9_model.v");
-			if (nowidelut) {
+			if (help_mode) {
+				run("abc9 -maxlut 4 -W 500", "(if -nowidelut)");
+				run("abc9 -lut 4:8 -W 500", "(unless -nowidelut)");
+			} else if (nowidelut) {
 				run("abc9 -maxlut 4 -W 500");
-			} else if (!nowidelut) {
-				run("abc9 -maxlut 8 -W 500");
+			} else {
+				// A LUT5 to LUT8 is built from 2 to 16 LUT4s and MUX2s, so its
+				// area doubles with each input above four.
+				run("abc9 -lut 4:8 -W 500");
 			}
 			run("clean");
 		}
