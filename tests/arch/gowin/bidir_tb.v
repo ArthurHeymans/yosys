@@ -4,7 +4,7 @@
 // Pads the design releases are also driven from outside, to check that
 // the value read back comes from the pad.
 module testbench;
-	localparam S = 2, P = 1;
+	localparam S = 5, P = 5;
 
 	reg [S-1:0] s;
 	reg [P-1:0] ext_en, ext_val;
@@ -22,6 +22,8 @@ module testbench;
 
 	task check;
 		begin
+			// A floating pad read has no hardware-defined logic value.
+			if (s[4] && !s[0]) ext_en[0] = 1'b1;
 			#1;
 			if (uut_p !== ref_p || uut_q !== ref_q) begin
 				$display("ERROR: s=%b ext_en=%b ext_val=%b: p %b/%b q %b/%b (ref/uut)",

@@ -1,0 +1,12 @@
+read_verilog <<EOT
+module top(input h, oe, d, inout t, output p);
+	assign t = oe ? d : 1'bz;
+	assign p = h ? t : 1'b0;
+endmodule
+EOT
+proc
+tribuf -logic
+opt_clean
+select -assert-count 1 t:$tribuf
+select -assert-count 1 w:t %ci1 t:$tribuf %i
+select -assert-none w:p %ci1 t:$tribuf %i
