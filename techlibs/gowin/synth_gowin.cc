@@ -286,6 +286,8 @@ struct SynthGowinPass : public ScriptPass
 				run("techmap -map +/gowin/dsp_map.v");
 			}
 
+			// Comparisons are cheaper in LUTs than in ALU carry chains.
+			run("techmap -map +/cmp2lut.v -map +/cmp2lcu.v -D LUT_WIDTH=4");
 			run("alumacc");
 			run("opt");
 			run("memory -nomap" + no_rw_check_opt);
