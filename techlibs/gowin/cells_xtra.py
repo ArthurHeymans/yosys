@@ -2,11 +2,10 @@
 
 # Base on Nexus cells_xtra.py
 
-from argparse import ArgumentParser
 import os.path
+from argparse import ArgumentParser
 from enum import Enum, auto
-import sys
-import re
+
 
 class State(Enum):
     OUTSIDE = auto()
@@ -22,7 +21,7 @@ _skip = { # These are already described, no need to extract them from the vendor
           'IDES16', 'IDES4', 'IDES8', 'IOBUF', 'IVIDEO', 'LUT1', 'LUT2',
           'LUT3', 'LUT4', 'MUX2', 'MUX2_LUT5', 'MUX2_LUT6', 'MUX2_LUT7',
           'MUX2_LUT8', 'OBUF', 'ODDR', 'ODDRC', 'OSC', 'OSCF', 'OSCH',
-          'OSCO', 'OSCW', 'OSCZ', 'OSER10', 'OSER16', 'OSER10', 'OSER4',
+          'OSCO', 'OSCW', 'OSCZ', 'OSER10', 'OSER16', 'OSER4',
           'OSER8', 'OVIDEO', 'PLLVR', 'RAM16S1', 'RAM16S2', 'RAM16S4',
           'RAM16SDP1', 'RAM16SDP2', 'RAM16SDP4', 'rPLL', 'SDP',
           'SDPX9', 'SP', 'SPX9', 'TBUF', 'TLVDS_OBUF', 'VCC', 'EMCU',
@@ -102,5 +101,4 @@ if __name__ == '__main__':
                     fout.write('// Added from adc.v\n')
                     fout.write('\n')
                     with open(f'adc.v', 'r') as fin:
-                        for l in fin:
-                            fout.write(l);
+                        fout.writelines(fin);

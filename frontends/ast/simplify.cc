@@ -38,6 +38,7 @@
 #include <math.h>
 #include <optional>
 #include <numeric>
+#include <limits>
 
 YOSYS_NAMESPACE_BEGIN
 
@@ -3131,6 +3132,22 @@ bool AstNode::simplify(bool const_fold, int stage, int width_hint, bool sign_hin
 		if (!use_case_method && current_always->detect_latch(children[0]->str))
 			use_case_method = true;
 
+		// Extract (index)*(width) from non_opt_range pattern ((@selfsz@((index)*(width)))+(0)).
+		AstNode *lsb_expr =
+			shift_expr->type == AST_ADD && shift_expr->children[0]->type == AST_SELFSZ &&
+			shift_expr->children[1]->type == AST_CONSTANT && shift_expr->children[1]->integer == 0 ?
+			shift_expr->children[0]->children[0].get() :
+			shift_expr.get();
+
+		// For writes to non-overlapping slices, dst[i*stride +: width] with
+		// stride >= width as in packed arrays, the case method only needs a
+		// decoder for the slice enables, while mask and shift builds two
+		// barrel shifters as wide as dst.
+		if (!use_case_method && !member_node && lsb_expr->type == AST_MUL)
+			for (auto &child : lsb_expr->children)
+				if (child->type == AST_CONSTANT && child->integer > 1 && child->integer >= result_width)
+					use_case_method = true;
+
 		if (use_case_method) {
 			// big case block
 
@@ -3158,13 +3175,6 @@ bool AstNode::simplify(bool const_fold, int stage, int width_hint, bool sign_hin
 				}
 				bitno_div = stride;
 			} else {
-				// Extract (index)*(width) from non_opt_range pattern ((@selfsz@((index)*(width)))+(0)).
-				AstNode *lsb_expr =
-					shift_expr->type == AST_ADD && shift_expr->children[0]->type == AST_SELFSZ &&
-					shift_expr->children[1]->type == AST_CONSTANT && shift_expr->children[1]->integer == 0 ?
-					shift_expr->children[0]->children[0].get() :
-					shift_expr.get();
-
 				// Extract stride from indexing of two-dimensional packed arrays and
 				// variable slices on the form dst[i*stride +: width] = src.
 				if (lsb_expr->type == AST_MUL &&
@@ -3200,15 +3210,19 @@ bool AstNode::simplify(bool const_fold, int stage, int width_hint, bool sign_hin
 						//   bitno mod gcd(stride, shift_mod) = 0
 						//
 						// long long is at least 64 bits in C++11
-						long long shift_mod = 1ll << (max_width - case_sign_hint);
+						// stride is an int, so 2^62 has the same gcd with it as
+						// any larger power of two, without overflowing long long.
+						long long shift_mod = 1ll << std::min(max_width - case_sign_hint, 62);
 						bitno_div = std::gcd((long long)stride, shift_mod);
 					}
 				}
 			}
 
-			// long long is at least 64 bits in C++11
-			long long max_offset = (1ll << (max_width - case_sign_hint)) - 1;
-			long long min_offset = case_sign_hint ? -(1ll << (max_width - 1)) : 0;
+			// Clamp wide ranges rather than shifting by the width of long long.
+			// All offsets examined below fit in long long.
+			int value_bits = max_width - case_sign_hint;
+			long long max_offset = value_bits >= 63 ? std::numeric_limits<long long>::max() : (1ll << value_bits) - 1;
+			long long min_offset = !case_sign_hint ? 0 : value_bits >= 63 ? std::numeric_limits<long long>::min() : -(1ll << value_bits);
 
 			// A temporary register holds the result of the (possibly complex) rvalue expression,
 			// avoiding repetition in each AST_COND below.
@@ -3235,7 +3249,8 @@ bool AstNode::simplify(bool const_fold, int stage, int width_hint, bool sign_hin
 				if (start_bit%bitno_div != 0 || (stride == 0 && start_bit != 0))
 					continue;
 
-				auto cond = std::make_unique<AstNode>(location, AST_COND, mkconst_int(location, start_bit, case_sign_hint, max_width));
+				auto cond = std::make_unique<AstNode>(location, AST_COND,
+						mkconst_bits(location, RTLIL::Const(start_bit, max_width).to_bits(), case_sign_hint));
 				auto lvalue = children[0]->clone();
 				lvalue->delete_children();
 				if (member_node)
