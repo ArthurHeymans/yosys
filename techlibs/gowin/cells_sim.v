@@ -674,7 +674,7 @@ module IOBUF (O, IO, I, OEN);
   output O;
   inout IO;
   assign IO = OEN ? 1'bz : I;
-  assign I = IO;
+  assign O = IO;
 endmodule
 
 module ELVDS_OBUF (I, O, OB);
