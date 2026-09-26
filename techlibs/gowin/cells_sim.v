@@ -1354,7 +1354,154 @@ end
 endmodule
 
 
-(* blackbox *)
+`define GOWIN_BSRAM_INIT {INIT_RAM_3F, INIT_RAM_3E, INIT_RAM_3D, INIT_RAM_3C, INIT_RAM_3B, INIT_RAM_3A, INIT_RAM_39, INIT_RAM_38, INIT_RAM_37, INIT_RAM_36, INIT_RAM_35, INIT_RAM_34, INIT_RAM_33, INIT_RAM_32, INIT_RAM_31, INIT_RAM_30, INIT_RAM_2F, INIT_RAM_2E, INIT_RAM_2D, INIT_RAM_2C, INIT_RAM_2B, INIT_RAM_2A, INIT_RAM_29, INIT_RAM_28, INIT_RAM_27, INIT_RAM_26, INIT_RAM_25, INIT_RAM_24, INIT_RAM_23, INIT_RAM_22, INIT_RAM_21, INIT_RAM_20, INIT_RAM_1F, INIT_RAM_1E, INIT_RAM_1D, INIT_RAM_1C, INIT_RAM_1B, INIT_RAM_1A, INIT_RAM_19, INIT_RAM_18, INIT_RAM_17, INIT_RAM_16, INIT_RAM_15, INIT_RAM_14, INIT_RAM_13, INIT_RAM_12, INIT_RAM_11, INIT_RAM_10, INIT_RAM_0F, INIT_RAM_0E, INIT_RAM_0D, INIT_RAM_0C, INIT_RAM_0B, INIT_RAM_0A, INIT_RAM_09, INIT_RAM_08, INIT_RAM_07, INIT_RAM_06, INIT_RAM_05, INIT_RAM_04, INIT_RAM_03, INIT_RAM_02, INIT_RAM_01, INIT_RAM_00}
+
+// Behavioural model shared by the block RAM primitives below.
+//
+// The array holds 64 rows of INIT_RAM data, 256 bits per row for the x8
+// primitives and 288 bits for the x9 ones. A port of width W accesses
+// word AD >> log2(W rounded down to a power of two), so a 9-bit port uses
+// AD[13:3]. Ports of 16/18 bits take byte enables from AD[1:0] and ports of
+// 32/36 bits from AD[3:0], with bytes of 8 or 9 bits.
+//
+// WRITE_MODE 0 keeps the output on a write, 1 shows the written word and
+// 2 the previous one. A port with READ_x = 0 only writes. READ_MODE 1 adds
+// an output register enabled by OCE.
+// Reset clears the outputs, synchronously regardless of CE or asynchronously
+// depending on RESET_MODE. Reads and writes of the same word from both ports
+// in one cycle are not modelled.
+module \$__GOWIN_BSRAM_SIM_ (
+	input CLKA, CEA, OCEA, RESETA, WREA,
+	input [13:0] ADA,
+	input [2:0] BLKSELA,
+	input [35:0] DIA,
+	output [35:0] DOA,
+	input CLKB, CEB, OCEB, RESETB, WREB,
+	input [13:0] ADB,
+	input [2:0] BLKSELB,
+	input [35:0] DIB,
+	output [35:0] DOB
+);
+
+parameter X9 = 0;
+parameter WIDTH_A = 18;
+parameter WIDTH_B = 18;
+parameter READ_MODE_A = 0;
+parameter READ_MODE_B = 0;
+parameter WRITE_MODE_A = 0;
+parameter WRITE_MODE_B = 0;
+parameter READ_A = 1;
+parameter READ_B = 1;
+parameter BLK_SEL_A = 3'b000;
+parameter BLK_SEL_B = 3'b000;
+parameter RESET_MODE = "SYNC";
+parameter [64*288-1:0] INIT = 0;
+
+localparam BYTE = X9 ? 9 : 8;
+localparam ROW = X9 ? 288 : 256;
+
+function integer addr_shift;
+	input integer width;
+	addr_shift = width >= 32 ? 5 : width >= 16 ? 4 : width >= 8 ? 3 : width >= 4 ? 2 : width >= 2 ? 1 : 0;
+endfunction
+
+reg [64*ROW-1:0] mem;
+integer r;
+initial
+	for (r = 0; r < 64; r = r + 1)
+		mem[r*ROW +: ROW] = INIT[r*ROW +: ROW];
+
+wire arst_a = RESET_MODE == "ASYNC" && RESETA === 1'b1;
+wire arst_b = RESET_MODE == "ASYNC" && RESETB === 1'b1;
+wire srst_a = RESET_MODE == "SYNC" && RESETA === 1'b1;
+wire srst_b = RESET_MODE == "SYNC" && RESETB === 1'b1;
+
+reg [35:0] out_a = 0, pipe_a = 0, out_b = 0, pipe_b = 0;
+assign DOA = READ_MODE_A ? pipe_a : out_a;
+assign DOB = READ_MODE_B ? pipe_b : out_b;
+
+function [35:0] word;
+	input integer width;
+	input [13:0] ad;
+	integer base, i;
+	begin
+		base = (ad >> addr_shift(width)) * width;
+		word = 0;
+		for (i = 0; i < width; i = i + 1)
+			word[i] = mem[base + i];
+	end
+endfunction
+
+function byte_enabled;
+	input integer width, i;
+	input [13:0] ad;
+	byte_enabled = width < 16 || ad[i / BYTE];
+endfunction
+
+// The word after a write, for write-through outputs.
+function [35:0] merged;
+	input integer width;
+	input [13:0] ad;
+	input [35:0] di;
+	integer i;
+	begin
+		merged = word(width, ad);
+		for (i = 0; i < width; i = i + 1)
+			if (byte_enabled(width, i, ad))
+				merged[i] = di[i];
+	end
+endfunction
+
+// The output after an access at the current clock edge.
+function [35:0] next_out;
+	input integer width, write_mode, can_read;
+	input write;
+	input [13:0] ad;
+	input [35:0] di, out;
+	next_out = !write ? (can_read ? word(width, ad) : out) :
+		write_mode == 1 ? merged(width, ad, di) :
+		write_mode == 2 ? word(width, ad) : out;
+endfunction
+
+integer ia, ib;
+
+always @(posedge CLKA)
+	if (CEA && BLKSELA == BLK_SEL_A && WREA)
+		for (ia = 0; ia < WIDTH_A; ia = ia + 1)
+			if (byte_enabled(WIDTH_A, ia, ADA))
+				mem[(ADA >> addr_shift(WIDTH_A)) * WIDTH_A + ia] <= DIA[ia];
+
+always @(posedge CLKB)
+	if (CEB && BLKSELB == BLK_SEL_B && WREB)
+		for (ib = 0; ib < WIDTH_B; ib = ib + 1)
+			if (byte_enabled(WIDTH_B, ib, ADB))
+				mem[(ADB >> addr_shift(WIDTH_B)) * WIDTH_B + ib] <= DIB[ib];
+
+// Reset only clears the outputs; writes go ahead.
+always @(posedge CLKA or posedge arst_a)
+	if (arst_a || srst_a) begin
+		out_a <= 0;
+		pipe_a <= 0;
+	end else begin
+		if (OCEA)
+			pipe_a <= out_a;
+		if (CEA && BLKSELA == BLK_SEL_A)
+			out_a <= next_out(WIDTH_A, WRITE_MODE_A, READ_A, WREA, ADA, DIA, out_a);
+	end
+
+always @(posedge CLKB or posedge arst_b)
+	if (arst_b || srst_b) begin
+		out_b <= 0;
+		pipe_b <= 0;
+	end else begin
+		if (OCEB)
+			pipe_b <= out_b;
+		if (CEB && BLKSELB == BLK_SEL_B)
+			out_b <= next_out(WIDTH_B, WRITE_MODE_B, READ_B, WREB, ADB, DIB, out_b);
+	end
+
+endmodule
+
 module SP (DO, DI, BLKSEL, AD, WRE, CLK, CE, OCE, RESET);
 
 // 1 Enables output pipeline registers.
@@ -1439,9 +1586,20 @@ input CE;
 input OCE;
 input RESET;
 
+	wire [35:0] dout;
+	assign DO = dout[31:0];
+	\$__GOWIN_BSRAM_SIM_ #(
+		.X9(0), .WIDTH_A(BIT_WIDTH), .READ_MODE_A(READ_MODE), .WRITE_MODE_A(WRITE_MODE),
+		.BLK_SEL_A(BLK_SEL), .RESET_MODE(RESET_MODE), .INIT(`GOWIN_BSRAM_INIT)
+	) ram (
+		.CLKA(CLK), .CEA(CE), .OCEA(OCE), .RESETA(RESET), .WREA(WRE),
+		.ADA(AD), .BLKSELA(BLKSEL), .DIA({4'b0, DI}), .DOA(dout),
+		.CLKB(1'b0), .CEB(1'b0), .OCEB(1'b0), .RESETB(1'b0), .WREB(1'b0),
+		.ADB(14'b0), .BLKSELB(3'b0), .DIB(36'b0), .DOB()
+	);
+
 endmodule
 
-(* blackbox *)
 module SPX9 (DO, DI, BLKSEL, AD, WRE, CLK, CE, OCE, RESET);
 
 // 1 Enables output pipeline registers.
@@ -1525,6 +1683,18 @@ input CLK;
 input CE;
 input OCE;
 input RESET;
+
+	wire [35:0] dout;
+	assign DO = dout[35:0];
+	\$__GOWIN_BSRAM_SIM_ #(
+		.X9(1), .WIDTH_A(BIT_WIDTH), .READ_MODE_A(READ_MODE), .WRITE_MODE_A(WRITE_MODE),
+		.BLK_SEL_A(BLK_SEL), .RESET_MODE(RESET_MODE), .INIT(`GOWIN_BSRAM_INIT)
+	) ram (
+		.CLKA(CLK), .CEA(CE), .OCEA(OCE), .RESETA(RESET), .WREA(WRE),
+		.ADA(AD), .BLKSELA(BLKSEL), .DIA(DI), .DOA(dout),
+		.CLKB(1'b0), .CEB(1'b0), .OCEB(1'b0), .RESETB(1'b0), .WREB(1'b0),
+		.ADB(14'b0), .BLKSELB(3'b0), .DIB(36'b0), .DOB()
+	);
 
 endmodule
 
@@ -1907,6 +2077,436 @@ input OCEA, OCEB;
 input RESETA, RESETB;
 
 endmodule
+
+
+module DPB(CLKA, CEA, CLKB, CEB, OCEA, OCEB, RESETA, RESETB, WREA, WREB, ADA, ADB, BLKSELA, BLKSELB, DIA, DIB, DOA, DOB);
+
+parameter READ_MODE0 = 1'b0;
+parameter READ_MODE1 = 1'b0;
+parameter WRITE_MODE0 = 2'b00;
+parameter WRITE_MODE1 = 2'b00;
+parameter BIT_WIDTH_0 = 16;
+parameter BIT_WIDTH_1 = 16;
+parameter BLK_SEL_0 = 3'b000;
+parameter BLK_SEL_1 = 3'b000;
+parameter RESET_MODE = "SYNC";
+parameter INIT_RAM_00 = 256'h0;
+parameter INIT_RAM_01 = 256'h0;
+parameter INIT_RAM_02 = 256'h0;
+parameter INIT_RAM_03 = 256'h0;
+parameter INIT_RAM_04 = 256'h0;
+parameter INIT_RAM_05 = 256'h0;
+parameter INIT_RAM_06 = 256'h0;
+parameter INIT_RAM_07 = 256'h0;
+parameter INIT_RAM_08 = 256'h0;
+parameter INIT_RAM_09 = 256'h0;
+parameter INIT_RAM_0A = 256'h0;
+parameter INIT_RAM_0B = 256'h0;
+parameter INIT_RAM_0C = 256'h0;
+parameter INIT_RAM_0D = 256'h0;
+parameter INIT_RAM_0E = 256'h0;
+parameter INIT_RAM_0F = 256'h0;
+parameter INIT_RAM_10 = 256'h0;
+parameter INIT_RAM_11 = 256'h0;
+parameter INIT_RAM_12 = 256'h0;
+parameter INIT_RAM_13 = 256'h0;
+parameter INIT_RAM_14 = 256'h0;
+parameter INIT_RAM_15 = 256'h0;
+parameter INIT_RAM_16 = 256'h0;
+parameter INIT_RAM_17 = 256'h0;
+parameter INIT_RAM_18 = 256'h0;
+parameter INIT_RAM_19 = 256'h0;
+parameter INIT_RAM_1A = 256'h0;
+parameter INIT_RAM_1B = 256'h0;
+parameter INIT_RAM_1C = 256'h0;
+parameter INIT_RAM_1D = 256'h0;
+parameter INIT_RAM_1E = 256'h0;
+parameter INIT_RAM_1F = 256'h0;
+parameter INIT_RAM_20 = 256'h0;
+parameter INIT_RAM_21 = 256'h0;
+parameter INIT_RAM_22 = 256'h0;
+parameter INIT_RAM_23 = 256'h0;
+parameter INIT_RAM_24 = 256'h0;
+parameter INIT_RAM_25 = 256'h0;
+parameter INIT_RAM_26 = 256'h0;
+parameter INIT_RAM_27 = 256'h0;
+parameter INIT_RAM_28 = 256'h0;
+parameter INIT_RAM_29 = 256'h0;
+parameter INIT_RAM_2A = 256'h0;
+parameter INIT_RAM_2B = 256'h0;
+parameter INIT_RAM_2C = 256'h0;
+parameter INIT_RAM_2D = 256'h0;
+parameter INIT_RAM_2E = 256'h0;
+parameter INIT_RAM_2F = 256'h0;
+parameter INIT_RAM_30 = 256'h0;
+parameter INIT_RAM_31 = 256'h0;
+parameter INIT_RAM_32 = 256'h0;
+parameter INIT_RAM_33 = 256'h0;
+parameter INIT_RAM_34 = 256'h0;
+parameter INIT_RAM_35 = 256'h0;
+parameter INIT_RAM_36 = 256'h0;
+parameter INIT_RAM_37 = 256'h0;
+parameter INIT_RAM_38 = 256'h0;
+parameter INIT_RAM_39 = 256'h0;
+parameter INIT_RAM_3A = 256'h0;
+parameter INIT_RAM_3B = 256'h0;
+parameter INIT_RAM_3C = 256'h0;
+parameter INIT_RAM_3D = 256'h0;
+parameter INIT_RAM_3E = 256'h0;
+parameter INIT_RAM_3F = 256'h0;
+
+input CLKA, CEA, CLKB, CEB;
+input OCEA, OCEB;
+input RESETA, RESETB;
+input WREA, WREB;
+input [13:0] ADA, ADB;
+input [2:0] BLKSELA, BLKSELB;
+input [15:0] DIA, DIB;
+output [15:0] DOA, DOB;
+
+	wire [35:0] douta, doutb;
+	assign DOA = douta[15:0];
+	assign DOB = doutb[15:0];
+	\$__GOWIN_BSRAM_SIM_ #(
+		.X9(0), .WIDTH_A(BIT_WIDTH_0), .WIDTH_B(BIT_WIDTH_1),
+		.READ_MODE_A(READ_MODE0), .READ_MODE_B(READ_MODE1),
+		.WRITE_MODE_A(WRITE_MODE0), .WRITE_MODE_B(WRITE_MODE1),
+		.BLK_SEL_A(BLK_SEL_0), .BLK_SEL_B(BLK_SEL_1),
+		.RESET_MODE(RESET_MODE), .INIT(`GOWIN_BSRAM_INIT)
+	) ram (
+		.CLKA(CLKA), .CEA(CEA), .OCEA(OCEA), .RESETA(RESETA), .WREA(WREA),
+		.ADA(ADA), .BLKSELA(BLKSELA), .DIA({20'b0, DIA}), .DOA(douta),
+		.CLKB(CLKB), .CEB(CEB), .OCEB(OCEB), .RESETB(RESETB), .WREB(WREB),
+		.ADB(ADB), .BLKSELB(BLKSELB), .DIB({20'b0, DIB}), .DOB(doutb)
+	);
+endmodule
+
+module DPX9B(CLKA, CEA, CLKB, CEB, OCEA, OCEB, RESETA, RESETB, WREA, WREB, ADA, ADB, DIA, DIB, BLKSELA, BLKSELB, DOA, DOB);
+
+parameter READ_MODE0 = 1'b0;
+parameter READ_MODE1 = 1'b0;
+parameter WRITE_MODE0 = 2'b00;
+parameter WRITE_MODE1 = 2'b00;
+parameter BIT_WIDTH_0 = 18;
+parameter BIT_WIDTH_1 = 18;
+parameter BLK_SEL_0 = 3'b000;
+parameter BLK_SEL_1 = 3'b000;
+parameter RESET_MODE = "SYNC";
+parameter INIT_RAM_00 = 288'h0;
+parameter INIT_RAM_01 = 288'h0;
+parameter INIT_RAM_02 = 288'h0;
+parameter INIT_RAM_03 = 288'h0;
+parameter INIT_RAM_04 = 288'h0;
+parameter INIT_RAM_05 = 288'h0;
+parameter INIT_RAM_06 = 288'h0;
+parameter INIT_RAM_07 = 288'h0;
+parameter INIT_RAM_08 = 288'h0;
+parameter INIT_RAM_09 = 288'h0;
+parameter INIT_RAM_0A = 288'h0;
+parameter INIT_RAM_0B = 288'h0;
+parameter INIT_RAM_0C = 288'h0;
+parameter INIT_RAM_0D = 288'h0;
+parameter INIT_RAM_0E = 288'h0;
+parameter INIT_RAM_0F = 288'h0;
+parameter INIT_RAM_10 = 288'h0;
+parameter INIT_RAM_11 = 288'h0;
+parameter INIT_RAM_12 = 288'h0;
+parameter INIT_RAM_13 = 288'h0;
+parameter INIT_RAM_14 = 288'h0;
+parameter INIT_RAM_15 = 288'h0;
+parameter INIT_RAM_16 = 288'h0;
+parameter INIT_RAM_17 = 288'h0;
+parameter INIT_RAM_18 = 288'h0;
+parameter INIT_RAM_19 = 288'h0;
+parameter INIT_RAM_1A = 288'h0;
+parameter INIT_RAM_1B = 288'h0;
+parameter INIT_RAM_1C = 288'h0;
+parameter INIT_RAM_1D = 288'h0;
+parameter INIT_RAM_1E = 288'h0;
+parameter INIT_RAM_1F = 288'h0;
+parameter INIT_RAM_20 = 288'h0;
+parameter INIT_RAM_21 = 288'h0;
+parameter INIT_RAM_22 = 288'h0;
+parameter INIT_RAM_23 = 288'h0;
+parameter INIT_RAM_24 = 288'h0;
+parameter INIT_RAM_25 = 288'h0;
+parameter INIT_RAM_26 = 288'h0;
+parameter INIT_RAM_27 = 288'h0;
+parameter INIT_RAM_28 = 288'h0;
+parameter INIT_RAM_29 = 288'h0;
+parameter INIT_RAM_2A = 288'h0;
+parameter INIT_RAM_2B = 288'h0;
+parameter INIT_RAM_2C = 288'h0;
+parameter INIT_RAM_2D = 288'h0;
+parameter INIT_RAM_2E = 288'h0;
+parameter INIT_RAM_2F = 288'h0;
+parameter INIT_RAM_30 = 288'h0;
+parameter INIT_RAM_31 = 288'h0;
+parameter INIT_RAM_32 = 288'h0;
+parameter INIT_RAM_33 = 288'h0;
+parameter INIT_RAM_34 = 288'h0;
+parameter INIT_RAM_35 = 288'h0;
+parameter INIT_RAM_36 = 288'h0;
+parameter INIT_RAM_37 = 288'h0;
+parameter INIT_RAM_38 = 288'h0;
+parameter INIT_RAM_39 = 288'h0;
+parameter INIT_RAM_3A = 288'h0;
+parameter INIT_RAM_3B = 288'h0;
+parameter INIT_RAM_3C = 288'h0;
+parameter INIT_RAM_3D = 288'h0;
+parameter INIT_RAM_3E = 288'h0;
+parameter INIT_RAM_3F = 288'h0;
+
+input CLKA, CEA, CLKB, CEB;
+input OCEA, OCEB;
+input RESETA, RESETB;
+input WREA, WREB;
+input [13:0] ADA, ADB;
+input [2:0] BLKSELA, BLKSELB;
+input [17:0] DIA, DIB;
+output [17:0] DOA, DOB;
+
+	wire [35:0] douta, doutb;
+	assign DOA = douta[17:0];
+	assign DOB = doutb[17:0];
+	\$__GOWIN_BSRAM_SIM_ #(
+		.X9(1), .WIDTH_A(BIT_WIDTH_0), .WIDTH_B(BIT_WIDTH_1),
+		.READ_MODE_A(READ_MODE0), .READ_MODE_B(READ_MODE1),
+		.WRITE_MODE_A(WRITE_MODE0), .WRITE_MODE_B(WRITE_MODE1),
+		.BLK_SEL_A(BLK_SEL_0), .BLK_SEL_B(BLK_SEL_1),
+		.RESET_MODE(RESET_MODE), .INIT(`GOWIN_BSRAM_INIT)
+	) ram (
+		.CLKA(CLKA), .CEA(CEA), .OCEA(OCEA), .RESETA(RESETA), .WREA(WREA),
+		.ADA(ADA), .BLKSELA(BLKSELA), .DIA({18'b0, DIA}), .DOA(douta),
+		.CLKB(CLKB), .CEB(CEB), .OCEB(OCEB), .RESETB(RESETB), .WREB(WREB),
+		.ADB(ADB), .BLKSELB(BLKSELB), .DIB({18'b0, DIB}), .DOB(doutb)
+	);
+endmodule
+
+// Match the family's vendor port list, including its positional order.
+// Define GOWIN_GW5A when simulating a GW5A netlist.
+module SDPB(CLKA, CEA, CLKB, CEB, OCE,
+`ifdef GOWIN_GW5A
+	RESET,
+`else
+	RESETA, RESETB,
+`endif
+	ADA, ADB, DI, BLKSELA, BLKSELB, DO);
+
+parameter READ_MODE = 1'b0;
+parameter BIT_WIDTH_0 = 32;
+parameter BIT_WIDTH_1 = 32;
+parameter BLK_SEL_0 = 3'b000;
+parameter BLK_SEL_1 = 3'b000;
+parameter RESET_MODE = "SYNC";
+parameter INIT_RAM_00 = 256'h0;
+parameter INIT_RAM_01 = 256'h0;
+parameter INIT_RAM_02 = 256'h0;
+parameter INIT_RAM_03 = 256'h0;
+parameter INIT_RAM_04 = 256'h0;
+parameter INIT_RAM_05 = 256'h0;
+parameter INIT_RAM_06 = 256'h0;
+parameter INIT_RAM_07 = 256'h0;
+parameter INIT_RAM_08 = 256'h0;
+parameter INIT_RAM_09 = 256'h0;
+parameter INIT_RAM_0A = 256'h0;
+parameter INIT_RAM_0B = 256'h0;
+parameter INIT_RAM_0C = 256'h0;
+parameter INIT_RAM_0D = 256'h0;
+parameter INIT_RAM_0E = 256'h0;
+parameter INIT_RAM_0F = 256'h0;
+parameter INIT_RAM_10 = 256'h0;
+parameter INIT_RAM_11 = 256'h0;
+parameter INIT_RAM_12 = 256'h0;
+parameter INIT_RAM_13 = 256'h0;
+parameter INIT_RAM_14 = 256'h0;
+parameter INIT_RAM_15 = 256'h0;
+parameter INIT_RAM_16 = 256'h0;
+parameter INIT_RAM_17 = 256'h0;
+parameter INIT_RAM_18 = 256'h0;
+parameter INIT_RAM_19 = 256'h0;
+parameter INIT_RAM_1A = 256'h0;
+parameter INIT_RAM_1B = 256'h0;
+parameter INIT_RAM_1C = 256'h0;
+parameter INIT_RAM_1D = 256'h0;
+parameter INIT_RAM_1E = 256'h0;
+parameter INIT_RAM_1F = 256'h0;
+parameter INIT_RAM_20 = 256'h0;
+parameter INIT_RAM_21 = 256'h0;
+parameter INIT_RAM_22 = 256'h0;
+parameter INIT_RAM_23 = 256'h0;
+parameter INIT_RAM_24 = 256'h0;
+parameter INIT_RAM_25 = 256'h0;
+parameter INIT_RAM_26 = 256'h0;
+parameter INIT_RAM_27 = 256'h0;
+parameter INIT_RAM_28 = 256'h0;
+parameter INIT_RAM_29 = 256'h0;
+parameter INIT_RAM_2A = 256'h0;
+parameter INIT_RAM_2B = 256'h0;
+parameter INIT_RAM_2C = 256'h0;
+parameter INIT_RAM_2D = 256'h0;
+parameter INIT_RAM_2E = 256'h0;
+parameter INIT_RAM_2F = 256'h0;
+parameter INIT_RAM_30 = 256'h0;
+parameter INIT_RAM_31 = 256'h0;
+parameter INIT_RAM_32 = 256'h0;
+parameter INIT_RAM_33 = 256'h0;
+parameter INIT_RAM_34 = 256'h0;
+parameter INIT_RAM_35 = 256'h0;
+parameter INIT_RAM_36 = 256'h0;
+parameter INIT_RAM_37 = 256'h0;
+parameter INIT_RAM_38 = 256'h0;
+parameter INIT_RAM_39 = 256'h0;
+parameter INIT_RAM_3A = 256'h0;
+parameter INIT_RAM_3B = 256'h0;
+parameter INIT_RAM_3C = 256'h0;
+parameter INIT_RAM_3D = 256'h0;
+parameter INIT_RAM_3E = 256'h0;
+parameter INIT_RAM_3F = 256'h0;
+
+input CLKA, CEA, CLKB, CEB;
+input OCE;
+`ifdef GOWIN_GW5A
+input RESET;
+`else
+input RESETA, RESETB;
+`endif
+input [13:0] ADA, ADB;
+input [2:0] BLKSELA, BLKSELB;
+input [31:0] DI;
+output [31:0] DO;
+
+	wire [35:0] dout;
+	assign DO = dout[31:0];
+	\$__GOWIN_BSRAM_SIM_ #(
+		.X9(0), .WIDTH_A(BIT_WIDTH_0), .WIDTH_B(BIT_WIDTH_1), .READ_A(0),
+		.READ_MODE_B(READ_MODE), .BLK_SEL_A(BLK_SEL_0), .BLK_SEL_B(BLK_SEL_1),
+		.RESET_MODE(RESET_MODE), .INIT(`GOWIN_BSRAM_INIT)
+	) ram (
+		.CLKA(CLKA), .CEA(CEA), .OCEA(1'b0), .RESETA(1'b0), .WREA(1'b1),
+		.ADA(ADA), .BLKSELA(BLKSELA), .DIA({4'b0, DI}), .DOA(),
+		.CLKB(CLKB), .CEB(CEB), .OCEB(OCE),
+`ifdef GOWIN_GW5A
+		.RESETB(RESET),
+`else
+		.RESETB(RESETB),
+`endif
+		.WREB(1'b0), .ADB(ADB), .BLKSELB(BLKSELB), .DIB(36'b0), .DOB(dout)
+	);
+endmodule
+
+// Match the family's vendor port list, including its positional order.
+module SDPX9B(CLKA, CEA, CLKB, CEB, OCE,
+`ifdef GOWIN_GW5A
+	RESET,
+`else
+	RESETA, RESETB,
+`endif
+	ADA, ADB, BLKSELA, BLKSELB, DI, DO);
+
+parameter READ_MODE = 1'b0;
+parameter BIT_WIDTH_0 = 36;
+parameter BIT_WIDTH_1 = 36;
+parameter BLK_SEL_0 = 3'b000;
+parameter BLK_SEL_1 = 3'b000;
+parameter RESET_MODE = "SYNC";
+parameter INIT_RAM_00 = 288'h0;
+parameter INIT_RAM_01 = 288'h0;
+parameter INIT_RAM_02 = 288'h0;
+parameter INIT_RAM_03 = 288'h0;
+parameter INIT_RAM_04 = 288'h0;
+parameter INIT_RAM_05 = 288'h0;
+parameter INIT_RAM_06 = 288'h0;
+parameter INIT_RAM_07 = 288'h0;
+parameter INIT_RAM_08 = 288'h0;
+parameter INIT_RAM_09 = 288'h0;
+parameter INIT_RAM_0A = 288'h0;
+parameter INIT_RAM_0B = 288'h0;
+parameter INIT_RAM_0C = 288'h0;
+parameter INIT_RAM_0D = 288'h0;
+parameter INIT_RAM_0E = 288'h0;
+parameter INIT_RAM_0F = 288'h0;
+parameter INIT_RAM_10 = 288'h0;
+parameter INIT_RAM_11 = 288'h0;
+parameter INIT_RAM_12 = 288'h0;
+parameter INIT_RAM_13 = 288'h0;
+parameter INIT_RAM_14 = 288'h0;
+parameter INIT_RAM_15 = 288'h0;
+parameter INIT_RAM_16 = 288'h0;
+parameter INIT_RAM_17 = 288'h0;
+parameter INIT_RAM_18 = 288'h0;
+parameter INIT_RAM_19 = 288'h0;
+parameter INIT_RAM_1A = 288'h0;
+parameter INIT_RAM_1B = 288'h0;
+parameter INIT_RAM_1C = 288'h0;
+parameter INIT_RAM_1D = 288'h0;
+parameter INIT_RAM_1E = 288'h0;
+parameter INIT_RAM_1F = 288'h0;
+parameter INIT_RAM_20 = 288'h0;
+parameter INIT_RAM_21 = 288'h0;
+parameter INIT_RAM_22 = 288'h0;
+parameter INIT_RAM_23 = 288'h0;
+parameter INIT_RAM_24 = 288'h0;
+parameter INIT_RAM_25 = 288'h0;
+parameter INIT_RAM_26 = 288'h0;
+parameter INIT_RAM_27 = 288'h0;
+parameter INIT_RAM_28 = 288'h0;
+parameter INIT_RAM_29 = 288'h0;
+parameter INIT_RAM_2A = 288'h0;
+parameter INIT_RAM_2B = 288'h0;
+parameter INIT_RAM_2C = 288'h0;
+parameter INIT_RAM_2D = 288'h0;
+parameter INIT_RAM_2E = 288'h0;
+parameter INIT_RAM_2F = 288'h0;
+parameter INIT_RAM_30 = 288'h0;
+parameter INIT_RAM_31 = 288'h0;
+parameter INIT_RAM_32 = 288'h0;
+parameter INIT_RAM_33 = 288'h0;
+parameter INIT_RAM_34 = 288'h0;
+parameter INIT_RAM_35 = 288'h0;
+parameter INIT_RAM_36 = 288'h0;
+parameter INIT_RAM_37 = 288'h0;
+parameter INIT_RAM_38 = 288'h0;
+parameter INIT_RAM_39 = 288'h0;
+parameter INIT_RAM_3A = 288'h0;
+parameter INIT_RAM_3B = 288'h0;
+parameter INIT_RAM_3C = 288'h0;
+parameter INIT_RAM_3D = 288'h0;
+parameter INIT_RAM_3E = 288'h0;
+parameter INIT_RAM_3F = 288'h0;
+
+input CLKA, CEA, CLKB, CEB;
+input OCE;
+`ifdef GOWIN_GW5A
+input RESET;
+`else
+input RESETA, RESETB;
+`endif
+input [13:0] ADA, ADB;
+input [2:0] BLKSELA, BLKSELB;
+input [35:0] DI;
+output [35:0] DO;
+
+	wire [35:0] dout;
+	assign DO = dout[35:0];
+	\$__GOWIN_BSRAM_SIM_ #(
+		.X9(1), .WIDTH_A(BIT_WIDTH_0), .WIDTH_B(BIT_WIDTH_1), .READ_A(0),
+		.READ_MODE_B(READ_MODE), .BLK_SEL_A(BLK_SEL_0), .BLK_SEL_B(BLK_SEL_1),
+		.RESET_MODE(RESET_MODE), .INIT(`GOWIN_BSRAM_INIT)
+	) ram (
+		.CLKA(CLKA), .CEA(CEA), .OCEA(1'b0), .RESETA(1'b0), .WREA(1'b1),
+		.ADA(ADA), .BLKSELA(BLKSELA), .DIA(DI), .DOA(),
+		.CLKB(CLKB), .CEB(CEB), .OCEB(OCE),
+`ifdef GOWIN_GW5A
+		.RESETB(RESET),
+`else
+		.RESETB(RESETB),
+`endif
+		.WREB(1'b0), .ADB(ADB), .BLKSELB(BLKSELB), .DIB(36'b0), .DOB(dout)
+	);
+endmodule
+
+`undef GOWIN_BSRAM_INIT
 
 
 (* blackbox *)
