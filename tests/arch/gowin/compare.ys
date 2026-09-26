@@ -6,4 +6,4 @@ design -load postopt # load the post-opt design (otherwise equiv_opt loads the p
 cd top # Constrain all select calls below inside the top module
 # 5-bit comparisons fit in a few LUTs without a carry chain
 select -assert-none t:ALU
-select -assert-count 16 t:LUT*
+select -assert-count 12 t:LUT*
