@@ -316,6 +316,20 @@ struct MemoryMapWorker
 
 		if (!static_only)
 		{
+			// Apply ports writing constant data (such as a loop clearing
+			// the memory on reset) last, where the priority mask allows it.
+			// The constant then ends up in front of the word register,
+			// where opt_dff turns it into a reset, instead of being folded
+			// into the data of every word.
+			std::vector<int> wr_order, wr_const;
+			for (int j = 0; j < GetSize(mem.wr_ports); j++) {
+				bool movable = mem.wr_ports[j].data.is_fully_const();
+				for (int k = j + 1; movable && k < GetSize(mem.wr_ports); k++)
+					movable = !mem.wr_ports[k].priority_mask[j];
+				(movable ? wr_const : wr_order).push_back(j);
+			}
+			wr_order.insert(wr_order.end(), wr_const.begin(), wr_const.end());
+
 			for (int i = 0; i < mem.size; i++)
 			{
 				int addr = i + mem.start_offset;
@@ -325,7 +339,7 @@ struct MemoryMapWorker
 
 				RTLIL::SigSpec sig = data_reg_out[idx];
 
-				for (int j = 0; j < GetSize(mem.wr_ports); j++)
+				for (int j : wr_order)
 				{
 					auto &port = mem.wr_ports[j];
 					RTLIL::SigSpec wr_addr = port.addr.extract_end(port.wide_log2);
