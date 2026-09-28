@@ -101,7 +101,7 @@ jobs:
             PKG_CONFIG_PATH={project}/ffi/pfx/lib/pkgconfig
             MACOSX_DEPLOYMENT_TARGET=11
             PATH="{project}/bison/src:$PATH"
-            CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release"
+            CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release -DCMAKE_IGNORE_PATH=/opt/homebrew/Cellar"
           CIBW_BEFORE_BUILD: bash ./.github/workflows/wheels/cibw_before_build.sh
           CIBW_TEST_COMMAND: python3 {project}/tests/pyosys/run_tests.py
       - uses: actions/upload-artifact@v7
