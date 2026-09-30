@@ -32,6 +32,8 @@ struct SimpleContext
 
 	// Cell to port bit index
 	typedef std::pair<RTLIL::Cell*, int> cell_int_t;
+	// Mux cell, port and bit index of a feedback input
+	typedef std::tuple<RTLIL::Cell*, RTLIL::IdString, int> feedback_t;
 
 	dict<SigBit, int> bitusers;       // Signal sink count
 	dict<SigBit, cell_int_t> bit2mux; // Signal bit to driving MUX
@@ -115,9 +117,86 @@ struct SimpleContext
 		mux->setPort(port, s);
 	}
 
-	patterns_t find_muxtree_feedback_patterns(RTLIL::SigBit d, RTLIL::SigBit q, pattern_t path)
+	// Mux output bits in the fan-in of an FF D input that have several users,
+	// all inside of it. proc produces such bits for an if statement around a
+	// case statement without a default: the value from before the if is
+	// both the else value and the case default.
+	pool<SigBit> private_mux_bits(SigBit d, SigBit q)
 	{
-		// Find feedback paths D->Q through mux tree, replacing found paths with Sx
+		std::vector<SigBit> nodes;
+		dict<SigBit, std::vector<SigBit>> inputs;
+		std::vector<SigBit> stack = {d};
+		pool<SigBit> seen = {d};
+		while (!stack.empty()) {
+			SigBit bit = stack.back();
+			stack.pop_back();
+			if (bit == q || bit2mux.count(bit) == 0)
+				continue;
+			if (nodes.size() >= 1000)
+				return {};
+			nodes.push_back(bit);
+			cell_int_t mbit = bit2mux.at(bit);
+			int width = GetSize(mbit.first->getPort(ID::A));
+			int s_width = GetSize(mbit.first->getPort(ID::S));
+			auto &in = inputs[bit];
+			in.push_back(port_bit(mbit.first, ID::A, mbit.second));
+			for (int i = 0; i < s_width; i++)
+				in.push_back(port_bit(mbit.first, ID::B, i*width + mbit.second));
+			for (auto in_bit : in)
+				if (seen.insert(in_bit).second)
+					stack.push_back(in_bit);
+		}
+
+		// A bit is private if all its users are private bits (or the FF).
+		// Dropping a bit takes away users from its inputs, so iterate.
+		pool<SigBit> priv(nodes.begin(), nodes.end());
+		for (bool changed = true; changed;) {
+			dict<SigBit, int> users;
+			users[d] = 1;
+			for (auto bit : priv)
+				for (auto in_bit : inputs.at(bit))
+					users[in_bit]++;
+			changed = false;
+			for (auto bit : nodes)
+				if (priv.count(bit) && users[bit] != bitusers[bit]) {
+					priv.erase(bit);
+					changed = true;
+				}
+		}
+
+		// Private bits with a single user need no special handling
+		pool<SigBit> shared;
+		for (auto bit : priv)
+			if (bitusers[bit] > 1)
+				shared.insert(bit);
+		return shared;
+	}
+
+	// Find the feedback paths D->Q through the mux tree of an FF and replace
+	// them with Sx. A private mux bit with several users is reached on more
+	// than one path, so collect all paths before breaking any feedback.
+	patterns_t find_muxtree_feedback_patterns(RTLIL::SigBit d, RTLIL::SigBit q)
+	{
+		pool<SigBit> priv = private_mux_bits(d, q);
+		std::vector<feedback_t> feedback;
+		int budget = 1000;
+		patterns_t ret = find_muxtree_feedback_patterns(d, q, pattern_t(), priv, feedback, budget);
+		if (budget < 0) {
+			// Only follow bits with a single user, as without shared bits
+			priv.clear();
+			feedback.clear();
+			ret = find_muxtree_feedback_patterns(d, q, pattern_t(), priv, feedback, budget);
+		}
+		for (auto &it : feedback)
+			break_feedback(std::get<0>(it), std::get<1>(it), std::get<2>(it));
+		return ret;
+	}
+
+	// The budget limits the paths explored when priv is not empty: through
+	// shared bits their number can grow exponentially.
+	patterns_t find_muxtree_feedback_patterns(RTLIL::SigBit d, RTLIL::SigBit q, pattern_t path,
+			const pool<SigBit> &priv, std::vector<feedback_t> &feedback, int &budget)
+	{
 		patterns_t ret;
 
 		if (d == q) {
@@ -125,8 +204,11 @@ struct SimpleContext
 			return ret; // Feedback found
 		}
 
-		if (bit2mux.count(d) == 0 || bitusers[d] > 1)
-			return ret; // D not driven by MUX / MUX drives multiple loads
+		if (bit2mux.count(d) == 0 || (bitusers[d] > 1 && !priv.count(d)))
+			return ret; // D not driven by MUX / MUX drives other loads
+
+		if (!priv.empty() && --budget < 0)
+			return ret; // Too many paths through shared bits
 
 		cell_int_t mbit = bit2mux.at(d);
 		RTLIL::Cell *mux = mbit.first;
@@ -137,9 +219,9 @@ struct SimpleContext
 		for (int i = 0; i < s_width; i++) {
 			RTLIL::SigBit s_bit = port_bit(mux, ID::S, i);
 			if (path.count(s_bit) && path.at(s_bit)) {
-				ret = find_muxtree_feedback_patterns(port_bit(mux, ID::B, i*width + index), q, path);
+				ret = find_muxtree_feedback_patterns(port_bit(mux, ID::B, i*width + index), q, path, priv, feedback, budget);
 				if (port_bit(mux, ID::B, i*width + index) == q)
-					break_feedback(mux, ID::B, i*width + index);
+					feedback.emplace_back(mux, ID::B, i*width + index);
 
 				return ret;
 			}
@@ -157,19 +239,19 @@ struct SimpleContext
 			path_this[s_bit] = true;  // Assume S=1 for 'this' path
 
 			// Selected when S=1
-			for (auto &pat : find_muxtree_feedback_patterns(port_bit(mux, ID::B, i*width + index), q, path_this))
+			for (auto &pat : find_muxtree_feedback_patterns(port_bit(mux, ID::B, i*width + index), q, path_this, priv, feedback, budget))
 				ret.insert(pat);
 
 			if (port_bit(mux, ID::B, i*width + index) == q)
-				break_feedback(mux, ID::B, i*width + index);
+				feedback.emplace_back(mux, ID::B, i*width + index);
 		}
 
 		// Selected when S=0
-		for (auto &pat : find_muxtree_feedback_patterns(port_bit(mux, ID::A, index), q, path_else))
+		for (auto &pat : find_muxtree_feedback_patterns(port_bit(mux, ID::A, index), q, path_else, priv, feedback, budget))
 			ret.insert(pat);
 
 		if (port_bit(mux, ID::A, index) == q)
-			break_feedback(mux, ID::A, index);
+			feedback.emplace_back(mux, ID::A, index);
 
 		return ret;
 	}
@@ -634,7 +716,7 @@ struct SimpleContext
 
 			patterns_t patterns;
 			if (!worker.opt.simple_dffe)
-				patterns = find_muxtree_feedback_patterns(ff.sig_d[i], ff.sig_q[i], pattern_t());
+				patterns = find_muxtree_feedback_patterns(ff.sig_d[i], ff.sig_q[i]);
 
 			if (!patterns.empty() || !enables.empty()) {
 				if (ff.has_ce)

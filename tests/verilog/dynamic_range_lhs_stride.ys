@@ -1,0 +1,22 @@
+# Writes to non-overlapping slices dst[i*stride +: width] use the case
+# method (a decoder for the slice enables) instead of mask and shift.
+read_verilog << EOT
+module stride(input clk, input [2:0] idx, input [7:0] d, output reg [63:0] q);
+	always @(posedge clk)
+		q[idx*8 +: 8] <= d;
+endmodule
+
+module packed_array(input clk, input [2:0] idx, input [7:0] d, output reg [7:0][7:0] q);
+	always @(posedge clk)
+		q[idx] <= d;
+endmodule
+
+module overlap(input clk, input [2:0] idx, input [7:0] d, output reg [63:0] q);
+	always @(posedge clk)
+		q[idx*4 +: 8] <= d;
+endmodule
+EOT
+proc
+select -assert-none stride/t:$shift stride/t:$shl
+select -assert-none packed_array/t:$shift packed_array/t:$shl
+select -assert-min 1 overlap/t:$shift

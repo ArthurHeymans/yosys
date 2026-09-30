@@ -3075,6 +3075,22 @@ bool AstNode::simplify(bool const_fold, int stage, int width_hint, bool sign_hin
 		if (!use_case_method && current_always->detect_latch(children[0]->str))
 			use_case_method = true;
 
+		// Extract (index)*(width) from non_opt_range pattern ((@selfsz@((index)*(width)))+(0)).
+		AstNode *lsb_expr =
+			shift_expr->type == AST_ADD && shift_expr->children[0]->type == AST_SELFSZ &&
+			shift_expr->children[1]->type == AST_CONSTANT && shift_expr->children[1]->integer == 0 ?
+			shift_expr->children[0]->children[0].get() :
+			shift_expr.get();
+
+		// For writes to non-overlapping slices, dst[i*stride +: width] with
+		// stride >= width as in packed arrays, the case method only needs a
+		// decoder for the slice enables, while mask and shift builds two
+		// barrel shifters as wide as dst.
+		if (!use_case_method && !member_node && lsb_expr->type == AST_MUL)
+			for (auto &child : lsb_expr->children)
+				if (child->type == AST_CONSTANT && child->integer > 1 && child->integer >= result_width)
+					use_case_method = true;
+
 		if (use_case_method) {
 			// big case block
 
@@ -3102,13 +3118,6 @@ bool AstNode::simplify(bool const_fold, int stage, int width_hint, bool sign_hin
 				}
 				bitno_div = stride;
 			} else {
-				// Extract (index)*(width) from non_opt_range pattern ((@selfsz@((index)*(width)))+(0)).
-				AstNode *lsb_expr =
-					shift_expr->type == AST_ADD && shift_expr->children[0]->type == AST_SELFSZ &&
-					shift_expr->children[1]->type == AST_CONSTANT && shift_expr->children[1]->integer == 0 ?
-					shift_expr->children[0]->children[0].get() :
-					shift_expr.get();
-
 				// Extract stride from indexing of two-dimensional packed arrays and
 				// variable slices on the form dst[i*stride +: width] = src.
 				if (lsb_expr->type == AST_MUL &&
@@ -3161,7 +3170,6 @@ bool AstNode::simplify(bool const_fold, int stage, int width_hint, bool sign_hin
 			children[1]->detectSignWidth(rvalue_width, rvalue_sign);
 			auto rvalue = mktemp_logic(location, "$bitselwrite$rvalue$", current_ast_mod, true, rvalue_width - 1, 0, rvalue_sign);
 			auto* rvalue_leaky = rvalue.get();
-			log("make 1\n");
 			auto case_node_owned = std::make_unique<AstNode>(location, AST_CASE, std::move(shift_expr));
 			auto* case_node = case_node_owned.get();
 			newNode = std::make_unique<AstNode>(location, AST_BLOCK,

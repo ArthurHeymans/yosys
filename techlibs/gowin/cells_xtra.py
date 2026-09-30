@@ -17,15 +17,15 @@ class State(Enum):
 _skip = { # These are already described, no need to extract them from the vendor files
           'ALU', 'BANDGAP', 'DFF', 'DFFC', 'DFFCE', 'DFFE', 'DFFN', 'DFFNC', 'DFFNCE',
           'DFFNE', 'DFFNP', 'DFFNPE', 'DFFNR', 'DFFNRE', 'DFFNS', 'DFFNSE',
-          'DFFP', 'DFFPE', 'DFFR', 'DFFRE', 'DFFS', 'DFFSE', 'DP', 'DPX9',
+          'DFFP', 'DFFPE', 'DFFR', 'DFFRE', 'DFFS', 'DFFSE', 'DP', 'DPB', 'DPX9', 'DPX9B',
           'ELVDS_OBUF', 'GND', 'GSR', 'IBUF', 'IDDR', 'IDDRC', 'IDES10',
           'IDES16', 'IDES4', 'IDES8', 'IOBUF', 'IVIDEO', 'LUT1', 'LUT2',
           'LUT3', 'LUT4', 'MUX2', 'MUX2_LUT5', 'MUX2_LUT6', 'MUX2_LUT7',
           'MUX2_LUT8', 'OBUF', 'ODDR', 'ODDRC', 'OSC', 'OSCF', 'OSCH',
           'OSCO', 'OSCW', 'OSCZ', 'OSER10', 'OSER16', 'OSER10', 'OSER4',
           'OSER8', 'OVIDEO', 'PLLVR', 'RAM16S1', 'RAM16S2', 'RAM16S4',
-          'RAM16SDP1', 'RAM16SDP2', 'RAM16SDP4', 'rPLL', 'SDP',
-          'SDPX9', 'SP', 'SPX9', 'TBUF', 'TLVDS_OBUF', 'VCC', 'EMCU',
+          'RAM16SDP1', 'RAM16SDP2', 'RAM16SDP4', 'rPLL', 'SDP', 'SDPB',
+          'SDPX9', 'SDPX9B', 'SP', 'SPX9', 'TBUF', 'TLVDS_OBUF', 'VCC', 'EMCU',
           # These are not planned for implementation
           'MUX2_MUX8', 'MUX2_MUX16', 'MUX2_MUX32', 'MUX4', 'MUX8', 'MUX16',
           'MUX32', 'DL', 'DLE', 'DLC', 'DLCE', 'DLP', 'DLPE', 'DLN', 'DLNE',

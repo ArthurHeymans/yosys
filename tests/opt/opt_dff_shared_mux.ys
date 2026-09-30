@@ -1,0 +1,39 @@
+# The value from before "if (b)" is both its else value and the default of
+# the case statement, so the mux holding it has two users. opt_dff should
+# still find the feedback path through it and give each 4-bit slice its
+# own enable.
+read_verilog << EOT
+module top(input clk, a, b, input [1:0] pos, input [3:0] d, output reg [15:0] q);
+	always @(posedge clk) begin
+		if (a) q <= 16'hffff;
+		if (b)
+			case (pos)
+				0: q[3:0] <= d;
+				1: q[7:4] <= d;
+				2: q[11:8] <= d;
+				3: q[15:12] <= d;
+			endcase
+	end
+endmodule
+EOT
+proc
+opt_expr
+opt_clean
+equiv_opt -assert opt_dff
+design -load postopt
+select -assert-count 4 t:$dffe
+select -assert-none t:$dff
+
+design -reset
+read_verilog << EOT
+module top(input clk, a, b, d, output reg q, output observed);
+	wire shared = a ? d : q;
+	assign observed = shared;
+	always @(posedge clk)
+		q <= b ? shared : q;
+endmodule
+EOT
+proc
+opt_expr
+opt_clean
+equiv_opt -assert opt_dff

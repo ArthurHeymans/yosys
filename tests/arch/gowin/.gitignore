@@ -1,2 +1,4 @@
 /*_uut.v
 /test_bidir
+/test_bram
+/test_bram_ports
