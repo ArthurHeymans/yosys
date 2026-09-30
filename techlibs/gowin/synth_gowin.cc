@@ -392,6 +392,7 @@ struct SynthGowinPass : public ScriptPass
 				run("splitnets -ports", "(only if -vout)");
 			run("clean");
 			run("autoname");
+			run("simplemap t:$buf");
 		}
 
 		if (check_label("check"))

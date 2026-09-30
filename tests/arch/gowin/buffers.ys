@@ -1,0 +1,12 @@
+read_verilog <<EOT
+module top(input a, input clk, output y);
+(* keep *) wire [1:0] word;
+reg d;
+always @(posedge clk) d <= a;
+assign word = {1'bz, d};
+assign y = word[0];
+endmodule
+EOT
+synth_gowin -family gw5a -top top
+select -assert-none t:$buf
+select -assert-none t:$_BUF_
