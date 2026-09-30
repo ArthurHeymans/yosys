@@ -4,4 +4,6 @@ proc
 equiv_opt -assert -map +/gowin/cells_sim.v synth_gowin # equivalency check
 design -load postopt # load the post-opt design (otherwise equiv_opt loads the pre-opt design)
 cd top # Constrain all select calls below inside the top module
-select -assert-count 5 t:ALU
+# 5-bit comparisons fit in a few LUTs without a carry chain
+select -assert-none t:ALU
+select -assert-count 12 t:LUT*

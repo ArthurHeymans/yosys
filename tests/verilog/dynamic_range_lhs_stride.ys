@@ -1,0 +1,57 @@
+# Writes to non-overlapping slices dst[i*stride +: width] use the case
+# method (a decoder for the slice enables) instead of mask and shift.
+read_verilog -formal << EOT
+module stride(input clk, input [2:0] idx, input [7:0] d, output reg [63:0] q);
+	always @(posedge clk)
+		q[idx*8 +: 8] <= d;
+endmodule
+
+module packed_array(input clk, input [2:0] idx, input [7:0] d, output reg [7:0][7:0] q);
+	always @(posedge clk)
+		q[idx] <= d;
+endmodule
+
+module overlap(input clk, input [2:0] idx, input [7:0] d, output reg [63:0] q);
+	always @(posedge clk)
+		q[idx*4 +: 8] <= d;
+endmodule
+
+module wide_index(input [63:0] idx64, input [79:0] idx80, input signed [63:0] sidx, input [1:0] d);
+	reg [7:0] q64, q80, qs;
+	reg [-1:-8] qneg;
+	always @* begin
+		q64 = 0;
+		q64[idx64*2 +: 2] = d;
+		q80 = 0;
+		q80[idx80*2 +: 2] = d;
+		qs = 0;
+		qs[sidx*2 +: 2] = d;
+		qneg = 0;
+		qneg[sidx*2 +: 2] = d;
+	end
+	// Exercise in-range and out-of-range indices without depending on how
+	// simulators handle part-select indices wider than their native integer.
+	always @* begin
+		assume(idx64 < 16);
+		assume(idx80 < 16);
+		assume(sidx >= -8 && sidx < 8);
+	end
+	genvar n;
+	for (n = 0; n < 4; n = n + 1) begin
+		always @* begin
+			assert(q64[n*2 +: 2] == (idx64[62:0] == n ? d : 2'b0));
+			assert(q80[n*2 +: 2] == (idx80[78:0] == n ? d : 2'b0));
+			assert(qs[n*2 +: 2] == (sidx[62:0] == n ? d : 2'b0));
+			assert(qneg[-8+n*2 +: 2] == (sidx[62:0] == (63'h7ffffffffffffffc+n) ? d : 2'b0));
+		end
+	end
+endmodule
+EOT
+proc
+select -assert-none stride/t:$shift stride/t:$shl
+select -assert-none packed_array/t:$shift packed_array/t:$shl
+select -assert-min 1 overlap/t:$shift
+hierarchy -top wide_index
+opt
+chformal -lower
+sat -verify -set-assumes -prove-asserts
