@@ -3161,7 +3161,6 @@ bool AstNode::simplify(bool const_fold, int stage, int width_hint, bool sign_hin
 			children[1]->detectSignWidth(rvalue_width, rvalue_sign);
 			auto rvalue = mktemp_logic(location, "$bitselwrite$rvalue$", current_ast_mod, true, rvalue_width - 1, 0, rvalue_sign);
 			auto* rvalue_leaky = rvalue.get();
-			log("make 1\n");
 			auto case_node_owned = std::make_unique<AstNode>(location, AST_CASE, std::move(shift_expr));
 			auto* case_node = case_node_owned.get();
 			newNode = std::make_unique<AstNode>(location, AST_BLOCK,
