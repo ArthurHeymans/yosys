@@ -10,3 +10,48 @@ select -assert-count 8 t:IBUF
 select -assert-count 1 t:GND
 select -assert-count 1 t:VCC
 select -assert-none t:ALU t:OBUF t:IBUF t:GND t:VCC %% t:* %D
+
+# Four-bit arithmetic uses LUTs when the carry threshold is above four.
+design -reset
+read_verilog ../common/add_sub.v
+hierarchy -top top
+proc
+equiv_opt -assert -map +/gowin/cells_sim.v synth_gowin -alu-min-width 17
+design -load postopt
+select -assert-none t:ALU
+
+# At the threshold, carry cells are still used.
+design -reset
+read_verilog ../common/add_sub.v
+hierarchy -top top
+proc
+equiv_opt -assert -map +/gowin/cells_sim.v synth_gowin -alu-min-width 4
+design -load postopt
+select -assert-count 8 t:ALU
+
+# Signed arithmetic at the larger experimental threshold also uses carry.
+design -reset
+read_verilog << EOT
+module top(input signed [16:0] a, b, output signed [16:0] sum);
+  assign sum = a + b;
+endmodule
+EOT
+hierarchy -top top
+proc
+equiv_opt -assert -map +/gowin/cells_sim.v synth_gowin -alu-min-width 17 -abc9-flow3
+design -load postopt
+select -assert-min 17 t:ALU
+
+# The same signed operation remains equivalent when mapped entirely to LUTs.
+design -reset
+read_verilog << EOT
+module top(input signed [16:0] a, b, output signed [16:0] sum, diff);
+  assign sum = a + b;
+  assign diff = a - b;
+endmodule
+EOT
+hierarchy -top top
+proc
+equiv_opt -assert -map +/gowin/cells_sim.v synth_gowin -alu-min-width 33 -abc9-flow3
+design -load postopt
+select -assert-none t:ALU

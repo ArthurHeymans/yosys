@@ -18,6 +18,10 @@
  *
  */
 
+`ifndef GOWIN_ALU_MIN_WIDTH
+`define GOWIN_ALU_MIN_WIDTH 3
+`endif
+
 (* techmap_celltype = "$alu" *)
 module _80_gw1n_alu(A, B, CI, BI, X, Y, CO);
    parameter A_SIGNED = 0;
@@ -37,7 +41,7 @@ module _80_gw1n_alu(A, B, CI, BI, X, Y, CO);
    (* force_downto *)
    output [Y_WIDTH-1:0] CO;
 
-   wire 		_TECHMAP_FAIL_ = Y_WIDTH <= 2;
+   wire 		_TECHMAP_FAIL_ = Y_WIDTH < `GOWIN_ALU_MIN_WIDTH;
 
    (* force_downto *)
    wire [Y_WIDTH-1:0] 	A_buf, B_buf;

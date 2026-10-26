@@ -121,6 +121,9 @@ struct SynthGowinPass : public ScriptPass
 		log("    -noalu\n");
 		log("        do not use ALU cells\n");
 		log("\n");
+		log("    -alu-min-width <width>\n");
+		log("        map narrower arithmetic to LUTs instead of carry cells (default 3)\n");
+		log("\n");
 		log("    -no-rw-check\n");
 		log("        marks all recognized read ports as \"return don't-care value on\n");
 		log("        read/write collision\" (same result as setting the no_rw_check\n");
@@ -143,6 +146,7 @@ struct SynthGowinPass : public ScriptPass
 	}
 
 	string top_opt, vout_file, json_file, family;
+	int alu_min_width;
 	bool nobram, nolutram, flatten, nodffe, strict_gw5a_dffs, widelut, abc9_flow3, noiopads, noalu, no_rw_check, setundef, nodsp;
 
 	void clear_flags() override
@@ -160,6 +164,7 @@ struct SynthGowinPass : public ScriptPass
 		abc9_flow3 = false;
 		noiopads = false;
 		noalu = false;
+		alu_min_width = 3;
 		no_rw_check = false;
 		setundef = false;
 		nodsp = false;
@@ -227,6 +232,18 @@ struct SynthGowinPass : public ScriptPass
 			}
 			if (args[argidx] == "-nowidelut") {
 				widelut = false;
+				continue;
+			}
+			if (args[argidx] == "-alu-min-width" && argidx+1 < args.size()) {
+				const auto &value = args[++argidx];
+				size_t end = 0;
+				try {
+					alu_min_width = std::stoi(value, &end);
+				} catch (const std::exception &) {
+					log_cmd_error("Invalid ALU minimum width '%s'.\n", value.c_str());
+				}
+				if (end != value.size() || alu_min_width < 1)
+					log_cmd_error("Invalid ALU minimum width '%s'.\n", value.c_str());
 				continue;
 			}
 			if (args[argidx] == "-abc9-flow3") {
@@ -358,7 +375,7 @@ struct SynthGowinPass : public ScriptPass
 			if (noalu) {
 				run("techmap -map +/techmap.v");
 			} else {
-				run("techmap -map +/techmap.v -map +/gowin/arith_map.v");
+				run(stringf("techmap -map +/techmap.v -map +/gowin/arith_map.v -D GOWIN_ALU_MIN_WIDTH=%d", alu_min_width));
 			}
 			run("opt -fast");
 			if (!noiopads || help_mode)
