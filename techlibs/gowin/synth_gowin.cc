@@ -115,8 +115,8 @@ struct SynthGowinPass : public ScriptPass
 		log("    -nowidelut\n");
 		log("        do not use muxes to implement LUTs larger than LUT4s (default)\n");
 		log("\n");
-		log("    -abc9-flow3\n");
-		log("        use the more expensive ABC9 flow3 mapping script\n");
+		log("    -abc9-flow2, -abc9-flow3\n");
+		log("        use the more expensive ABC9 flow2 or flow3 mapping script\n");
 		log("\n");
 		log("    -abc9-wire-delay <picoseconds>\n");
 		log("        set ABC9's estimated inter-LUT wire delay (default 500)\n");
@@ -152,8 +152,8 @@ struct SynthGowinPass : public ScriptPass
 	}
 
 	string top_opt, vout_file, json_file, family;
-	int alu_min_width, abc9_wire_delay;
-	bool nobram, prefer_bram, nolutram, flatten, nodffe, strict_gw5a_dffs, widelut, abc9_flow3, noiopads, noalu, no_rw_check, setundef, nodsp;
+	int alu_min_width, abc9_wire_delay, abc9_flow;
+	bool nobram, prefer_bram, nolutram, flatten, nodffe, strict_gw5a_dffs, widelut, noiopads, noalu, no_rw_check, setundef, nodsp;
 
 	void clear_flags() override
 	{
@@ -168,7 +168,7 @@ struct SynthGowinPass : public ScriptPass
 		strict_gw5a_dffs = false;
 		nolutram = false;
 		widelut = false;
-		abc9_flow3 = false;
+		abc9_flow = 0;
 		abc9_wire_delay = 500;
 		noiopads = false;
 		noalu = false;
@@ -270,8 +270,8 @@ struct SynthGowinPass : public ScriptPass
 					log_cmd_error("Invalid ABC9 wire delay '%s'.\n", value.c_str());
 				continue;
 			}
-			if (args[argidx] == "-abc9-flow3") {
-				abc9_flow3 = true;
+			if (args[argidx] == "-abc9-flow2" || args[argidx] == "-abc9-flow3") {
+				abc9_flow = args[argidx] == "-abc9-flow2" ? 2 : 3;
 				continue;
 			}
 			if (args[argidx] == "-noalu") {
@@ -436,14 +436,15 @@ struct SynthGowinPass : public ScriptPass
 			run("read_verilog -icells -lib -specify +/abc9_model.v");
 			// Mapping for area gives smaller and, as it needs less routing,
 			// usually also faster designs than mapping for depth.
-			std::string abc_script = RTLIL::constpad.at(abc9_flow3 ? "abc9.script.flow3" : "abc9.script.default.area");
+			std::string abc_script = RTLIL::constpad.at(abc9_flow == 2 ? "abc9.script.flow2" :
+					abc9_flow == 3 ? "abc9.script.flow3" : "abc9.script.default.area");
 			std::replace(abc_script.begin(), abc_script.end(), ' ', ',');
 			if (help_mode) {
-				run("abc9 -maxlut 4 -W 500 -script <area script>", "(unless -widelut or -abc9-flow3)");
-				run("abc9 -lut 4:8 -W 500", "(if -widelut and not -abc9-flow3)");
-				run("abc9 -maxlut 4 -W 500 -script <flow3 script>", "(if -abc9-flow3 and not -widelut)");
-				run("abc9 -lut 4:8 -W 500 -script <flow3 script>", "(if -abc9-flow3 and -widelut)");
-			} else if (abc9_flow3) {
+				run("abc9 -maxlut 4 -W 500 -script <area script>", "(unless -widelut or -abc9-flow2/-abc9-flow3)");
+				run("abc9 -lut 4:8 -W 500", "(if -widelut and not -abc9-flow2/-abc9-flow3)");
+				run("abc9 -maxlut 4 -W 500 -script <flow2/flow3 script>", "(if -abc9-flow2/-abc9-flow3 and not -widelut)");
+				run("abc9 -lut 4:8 -W 500 -script <flow2/flow3 script>", "(if -abc9-flow2/-abc9-flow3 and -widelut)");
+			} else if (abc9_flow) {
 				run(std::string("abc9 ") + (widelut ? "-lut 4:8" : "-maxlut 4") + stringf(" -W %d -script ", abc9_wire_delay) + abc_script);
 			} else if (!widelut) {
 				run(stringf("abc9 -maxlut 4 -W %d -script ", abc9_wire_delay) + abc_script);

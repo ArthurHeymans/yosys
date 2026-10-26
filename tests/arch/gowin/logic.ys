@@ -18,3 +18,9 @@ read_verilog ../common/logic.v
 hierarchy -top top
 proc
 equiv_opt -assert -map +/gowin/cells_sim.v synth_gowin -abc9-flow3 -abc9-wire-delay 250
+
+design -reset
+read_verilog ../common/logic.v
+hierarchy -top top
+proc
+equiv_opt -assert -map +/gowin/cells_sim.v synth_gowin -abc9-flow2 -abc9-wire-delay 250
