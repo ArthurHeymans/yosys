@@ -15,3 +15,22 @@ cd lutram_1w1r
 select -assert-count 8 t:RAM16SDP4
 # other logic present that is not simple
 #select -assert-none t:RAM16S4 %% t:* %D
+
+# Prefer a block RAM over distributed RAM for a small dual-clock memory.
+design -reset
+read_verilog << EOT
+module top(input wc, rc, we, input [6:0] wa, ra, input [7:0] d, output reg [7:0] q);
+  reg [7:0] mem [0:127];
+  always @(posedge wc) if (we) mem[wa] <= d;
+  always @(posedge rc) q <= mem[ra];
+endmodule
+EOT
+hierarchy -top top
+design -save input
+synth_gowin -family gw5a -noiopads
+select -assert-count 16 t:RAM16SDP4
+
+design -load input
+synth_gowin -family gw5a -noiopads -prefer-bram
+select -assert-count 1 t:DPX9B t:SDPX9B
+select -assert-none t:RAM16SDP4

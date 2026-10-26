@@ -99,6 +99,9 @@ struct SynthGowinPass : public ScriptPass
 		log("    -nobram\n");
 		log("        do not use BRAM cells in output netlist\n");
 		log("\n");
+		log("    -prefer-bram\n");
+		log("        lower the cost of block RAM relative to distributed RAM\n");
+		log("\n");
 		log("    -nolutram\n");
 		log("        do not use distributed RAM cells in output netlist\n");
 		log("\n");
@@ -147,7 +150,7 @@ struct SynthGowinPass : public ScriptPass
 
 	string top_opt, vout_file, json_file, family;
 	int alu_min_width;
-	bool nobram, nolutram, flatten, nodffe, strict_gw5a_dffs, widelut, abc9_flow3, noiopads, noalu, no_rw_check, setundef, nodsp;
+	bool nobram, prefer_bram, nolutram, flatten, nodffe, strict_gw5a_dffs, widelut, abc9_flow3, noiopads, noalu, no_rw_check, setundef, nodsp;
 
 	void clear_flags() override
 	{
@@ -157,6 +160,7 @@ struct SynthGowinPass : public ScriptPass
 		json_file = "";
 		flatten = true;
 		nobram = false;
+		prefer_bram = false;
 		nodffe = false;
 		strict_gw5a_dffs = false;
 		nolutram = false;
@@ -208,6 +212,10 @@ struct SynthGowinPass : public ScriptPass
 			}
 			if (args[argidx] == "-nobram") {
 				nobram = true;
+				continue;
+			}
+			if (args[argidx] == "-prefer-bram") {
+				prefer_bram = true;
 				continue;
 			}
 			if (args[argidx] == "-nolutram" || /*deprecated*/args[argidx] == "-nodram") {
@@ -352,8 +360,10 @@ struct SynthGowinPass : public ScriptPass
 		{
 			std::string args = "";
 			if (help_mode)
-				args += " [-no-auto-block] [-no-auto-distributed]";
+				args += " [-D prefer_bram] [-no-auto-block] [-no-auto-distributed]";
 			else {
+				if (prefer_bram)
+					args += " -D prefer_bram";
 				if (nobram)
 					args += " -no-auto-block";
 				if (nolutram)
