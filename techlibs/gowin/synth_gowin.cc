@@ -118,6 +118,9 @@ struct SynthGowinPass : public ScriptPass
 		log("    -abc9-flow3\n");
 		log("        use the more expensive ABC9 flow3 mapping script\n");
 		log("\n");
+		log("    -abc9-wire-delay <picoseconds>\n");
+		log("        set ABC9's estimated inter-LUT wire delay (default 500)\n");
+		log("\n");
 		log("    -noiopads\n");
 		log("        do not emit IOB at top level ports\n");
 		log("\n");
@@ -149,7 +152,7 @@ struct SynthGowinPass : public ScriptPass
 	}
 
 	string top_opt, vout_file, json_file, family;
-	int alu_min_width;
+	int alu_min_width, abc9_wire_delay;
 	bool nobram, prefer_bram, nolutram, flatten, nodffe, strict_gw5a_dffs, widelut, abc9_flow3, noiopads, noalu, no_rw_check, setundef, nodsp;
 
 	void clear_flags() override
@@ -166,6 +169,7 @@ struct SynthGowinPass : public ScriptPass
 		nolutram = false;
 		widelut = false;
 		abc9_flow3 = false;
+		abc9_wire_delay = 500;
 		noiopads = false;
 		noalu = false;
 		alu_min_width = 3;
@@ -252,6 +256,18 @@ struct SynthGowinPass : public ScriptPass
 				}
 				if (end != value.size() || alu_min_width < 1)
 					log_cmd_error("Invalid ALU minimum width '%s'.\n", value.c_str());
+				continue;
+			}
+			if (args[argidx] == "-abc9-wire-delay" && argidx+1 < args.size()) {
+				const auto &value = args[++argidx];
+				size_t end = 0;
+				try {
+					abc9_wire_delay = std::stoi(value, &end);
+				} catch (const std::exception &) {
+					log_cmd_error("Invalid ABC9 wire delay '%s'.\n", value.c_str());
+				}
+				if (end != value.size() || abc9_wire_delay < 0)
+					log_cmd_error("Invalid ABC9 wire delay '%s'.\n", value.c_str());
 				continue;
 			}
 			if (args[argidx] == "-abc9-flow3") {
@@ -428,13 +444,13 @@ struct SynthGowinPass : public ScriptPass
 				run("abc9 -maxlut 4 -W 500 -script <flow3 script>", "(if -abc9-flow3 and not -widelut)");
 				run("abc9 -lut 4:8 -W 500 -script <flow3 script>", "(if -abc9-flow3 and -widelut)");
 			} else if (abc9_flow3) {
-				run(std::string("abc9 ") + (widelut ? "-lut 4:8" : "-maxlut 4") + " -W 500 -script " + abc_script);
+				run(std::string("abc9 ") + (widelut ? "-lut 4:8" : "-maxlut 4") + stringf(" -W %d -script ", abc9_wire_delay) + abc_script);
 			} else if (!widelut) {
-				run("abc9 -maxlut 4 -W 500 -script " + abc_script);
+				run(stringf("abc9 -maxlut 4 -W %d -script ", abc9_wire_delay) + abc_script);
 			} else {
 				// A LUT5 to LUT8 is built from 2 to 16 LUT4s and MUX2s, so its
 				// area doubles with each input above four.
-				run("abc9 -lut 4:8 -W 500");
+				run(stringf("abc9 -lut 4:8 -W %d", abc9_wire_delay));
 			}
 			run("clean");
 		}
