@@ -112,6 +112,9 @@ struct SynthGowinPass : public ScriptPass
 		log("    -nowidelut\n");
 		log("        do not use muxes to implement LUTs larger than LUT4s (default)\n");
 		log("\n");
+		log("    -abc9-flow3\n");
+		log("        use the more expensive ABC9 flow3 mapping script\n");
+		log("\n");
 		log("    -noiopads\n");
 		log("        do not emit IOB at top level ports\n");
 		log("\n");
@@ -140,7 +143,7 @@ struct SynthGowinPass : public ScriptPass
 	}
 
 	string top_opt, vout_file, json_file, family;
-	bool nobram, nolutram, flatten, nodffe, strict_gw5a_dffs, widelut, noiopads, noalu, no_rw_check, setundef, nodsp;
+	bool nobram, nolutram, flatten, nodffe, strict_gw5a_dffs, widelut, abc9_flow3, noiopads, noalu, no_rw_check, setundef, nodsp;
 
 	void clear_flags() override
 	{
@@ -154,6 +157,7 @@ struct SynthGowinPass : public ScriptPass
 		strict_gw5a_dffs = false;
 		nolutram = false;
 		widelut = false;
+		abc9_flow3 = false;
 		noiopads = false;
 		noalu = false;
 		no_rw_check = false;
@@ -223,6 +227,10 @@ struct SynthGowinPass : public ScriptPass
 			}
 			if (args[argidx] == "-nowidelut") {
 				widelut = false;
+				continue;
+			}
+			if (args[argidx] == "-abc9-flow3") {
+				abc9_flow3 = true;
 				continue;
 			}
 			if (args[argidx] == "-noalu") {
@@ -385,13 +393,17 @@ struct SynthGowinPass : public ScriptPass
 			run("read_verilog -icells -lib -specify +/abc9_model.v");
 			// Mapping for area gives smaller and, as it needs less routing,
 			// usually also faster designs than mapping for depth.
-			std::string area_script = RTLIL::constpad.at("abc9.script.default.area");
-			std::replace(area_script.begin(), area_script.end(), ' ', ',');
+			std::string abc_script = RTLIL::constpad.at(abc9_flow3 ? "abc9.script.flow3" : "abc9.script.default.area");
+			std::replace(abc_script.begin(), abc_script.end(), ' ', ',');
 			if (help_mode) {
-				run("abc9 -maxlut 4 -W 500 -script <area script>", "(unless -widelut)");
-				run("abc9 -lut 4:8 -W 500", "(if -widelut)");
+				run("abc9 -maxlut 4 -W 500 -script <area script>", "(unless -widelut or -abc9-flow3)");
+				run("abc9 -lut 4:8 -W 500", "(if -widelut and not -abc9-flow3)");
+				run("abc9 -maxlut 4 -W 500 -script <flow3 script>", "(if -abc9-flow3 and not -widelut)");
+				run("abc9 -lut 4:8 -W 500 -script <flow3 script>", "(if -abc9-flow3 and -widelut)");
+			} else if (abc9_flow3) {
+				run(std::string("abc9 ") + (widelut ? "-lut 4:8" : "-maxlut 4") + " -W 500 -script " + abc_script);
 			} else if (!widelut) {
-				run("abc9 -maxlut 4 -W 500 -script " + area_script);
+				run("abc9 -maxlut 4 -W 500 -script " + abc_script);
 			} else {
 				// A LUT5 to LUT8 is built from 2 to 16 LUT4s and MUX2s, so its
 				// area doubles with each input above four.
